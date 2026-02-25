@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Creative Commons Rights Finder</title>
+  
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<section class="background-control">
+  <div id="h1-background">
+<h1>Creative Commons Digital Asset Finder</h1> 
+</div>
+
+<div class="navbar">
+  <a href="index.html">Home</a>
+  <a href="about.html">About</a>
+  <div class="dropdown">
+    <button class="dropbtn">Browse  
+      <i class="fa fa-caret-down"></i>
+    </button>
+    <div class="dropdown-content">  
+      <a href="browse.html">Wiki Commons</a>
+      <a href="poly.html">Poly Haven</a>
+    </div>
+  </div>
+</div>
+
+
+<!-- Home -->
+  <section class="browse-outside-text-block">
+  <section class="browse-index-text-block">
+<h2>Poly Haven</h2>
+<br>
+
+
+<p>
+Search Poly Haven for Immersive High-Definition Resolution Images. 
+</p>
+</div>
+<h3>Search Keywords</h3>
+
+<h4>Textures</h4>
+
+<p><b>Try these:</b> outdoor, man made, floor, wall, natural, terrain, plaster-concrete, dirty, rock, 
+  brick, wood</p>
+
+<h4>HDRIs</h4>
+
+<p><b>Try these:</b> natural light, outdoor, nature, urban, low contrast, high contrast, 
+  morning-afternoon, partly cloudy, skies, indoor, medium contrast,</p>
+
+<h4>Models</h4>
+
+<p><b>Try these:</b> props, nature, furniture</p>
+  
+  </section>
+  </section>
+
+
+
+
+<form id="searchForm">
+    <select id="assetType">
+    <option value="textures" selected>Textures</option>
+    <option value="hdris">HDRIs</option>
+    <option value="models">Models</option>
+  </select>
+    <input id="q" type="text" placeholder="Try: Outdoors..." required />
+    <button type="submit">Search</button>
+  </form>
+
+
+
+
+
+
+  <div id="status" class="status"></div>
+  <div id="results" class="grid" aria-live="polite"></div>
+
+<script>
+  const form = document.getElementById("searchForm");
+  const resultsEl = document.getElementById("results");
+  const statusEl = document.getElementById("status");
+
+  const categoriesCache = new Map();
+
+  function safeText(s) {
+    return (s || "").toString().replace(/\s+/g, " ").trim();
+  }
+
+  function polyAssetPageUrl(assetId) {
+    return `https://polyhaven.com/a/${assetId}`;
+  }
+
+  function polyThumbUrl(assetId, assetType) {
+    if (assetType === "hdris") {
+      return `https://cdn.polyhaven.com/asset_img/thumbs/${assetId}.png?width=371&height=278`;
+    }
+    if (assetType === "models") {
+      return `https://cdn.polyhaven.com/asset_img/thumbs/${assetId}.png?width=450&height=300`;
+    }
+    return `https://cdn.polyhaven.com/asset_img/thumbs/${assetId}.png?width=285&height=285`;
+  }
+
+  async function getCategories(assetType) {
+    if (categoriesCache.has(assetType)) return categoriesCache.get(assetType);
+
+    const url = `https://api.polyhaven.com/categories/${encodeURIComponent(assetType)}`;
+    const resp = await fetch(url); // no User-Agent header in browser
+    if (!resp.ok) throw new Error(`Categories HTTP ${resp.status}`);
+
+    const data = await resp.json();
+    const categories = Object.keys(data || {});
+    categoriesCache.set(assetType, categories);
+    return categories;
+  }
+
+  function findMatchingCategory(categories, query) {
+    const q = query.toLowerCase().trim();
+    const contains = categories.find(c => c.toLowerCase().includes(q));
+    if (contains) return contains;
+
+    const q2 = q.endsWith("s") ? q.slice(0, -1) : q + "s";
+    return categories.find(c => c.toLowerCase().includes(q2)) || null;
+  }
+
+  async function searchPolyHavenByCategory(query, assetType) {
+    const categories = await getCategories(assetType);
+    const matchedCategory = findMatchingCategory(categories, query);
+
+    if (!matchedCategory) {
+      return { assets: {}, matchedCategory: null, categories };
+    }
+
+    const url = new URL("https://api.polyhaven.com/assets");
+    url.searchParams.set("type", assetType);
+    url.searchParams.set("categories", matchedCategory);
+
+    const resp = await fetch(url.toString()); // no User-Agent header in browser
+    if (!resp.ok) throw new Error(`Assets HTTP ${resp.status}`);
+
+    const assetsObj = await resp.json();
+    return { assets: assetsObj || {}, matchedCategory, categories };
+  }
+
+  async function getPolyInfo(assetId) {
+    const url = `https://api.polyhaven.com/info/${encodeURIComponent(assetId)}`;
+    const resp = await fetch(url); // no User-Agent header in browser
+    if (!resp.ok) throw new Error(`Info HTTP ${resp.status}`);
+    return resp.json();
+  }
+
+function extractAuthors(meta) {
+  const a = meta?.authors ?? meta?.author ?? meta?.creator ?? meta?.credit ?? null;
+  if (!a) return [];
+
+  // 1) "authors": ["Greg Zaal", ...]
+  if (Array.isArray(a)) {
+    return a
+      .map(x => (typeof x === "string" ? x : x?.name))
+      .filter(Boolean);
+  }
+
+  // 2) "author": "Greg Zaal"
+  if (typeof a === "string") return [a];
+
+  // 3) "creator": { name: "Greg Zaal" }
+  if (typeof a === "object" && a.name) return [a.name];
+
+  // 4) "authors": { "Greg Zaal": "...", "Someone Else": "..." }
+  if (typeof a === "object") {
+    const keys = Object.keys(a);
+    if (keys.length) return keys;
+  }
+
+  return [];
+}
+
+  function licenseStatement(license) {
+    if (!license) return "License unknown";
+    if (license.toLowerCase().includes("cc0")) {
+      return "CC0 Public Domain. Free for commercial and non-commercial use. No attribution required (but appreciated).";
+    }
+    return license;
+  }
+
+  function renderPolyResults(assetsObj, assetType, matchedCategory, categories, query) {
+    resultsEl.innerHTML = "";
+
+    const entries = Object.entries(assetsObj || {});
+    if (!matchedCategory) {
+      statusEl.textContent =
+        `No category matched "${query}" for ${assetType}. Try one of these: ` +
+        categories.slice(0, 12).join(", ") +
+        (categories.length > 12 ? ", ..." : "");
+      return;
+    }
+
+    if (entries.length === 0) {
+      statusEl.textContent = `No assets found in category "${matchedCategory}". Try another keyword.`;
+      return;
+    }
+
+    const shown = entries.slice(0, 60);
+    statusEl.textContent = `Showing ${shown.length} results in "${matchedCategory}" (${assetType}).`;
+
+    for (const [assetId, info] of shown) {
+      const displayName = safeText(info?.name) || assetId;
+      const thumb = polyThumbUrl(assetId, assetType);
+      const pageUrl = polyAssetPageUrl(assetId);
+
+      const card = document.createElement("div");
+      card.className = "card";
+
+      // Important: fully closed HTML here
+      card.innerHTML = `
+        <a href="${pageUrl}" target="_blank" rel="noopener noreferrer">
+          <img class="thumb" src="${thumb}" alt="${displayName}">
+        </a>
+
+        <div class="title">${displayName}</div>
+        <div class="row"><b>Type:</b> ${assetType}</div>
+        <div class="row"><b>Category:</b> ${matchedCategory}</div>
+
+        <div class="row"><b>Creator:</b> <span class="creator">Loading...</span></div>
+        <div class="row"><b>License:</b> <span class="license">Loading...</span></div>
+        <div class="row"><b>Rights:</b> <span class="rights">Loading...</span></div>
+
+        <div class="row"><b>Attribution to copy:</b></div>
+        <textarea class="attrib" readonly>Loading...</textarea>
+
+        <div class="actions">
+          <button class="smallbtn" type="button">Copy attribution</button>
+          <a href="${pageUrl}" target="_blank" rel="noopener noreferrer">Open asset page</a>
+        </div>
+      `;
+
+      resultsEl.appendChild(card);
+
+      // Hook up copy button
+      const copyBtn = card.querySelector("button.smallbtn");
+      const textArea = card.querySelector("textarea.attrib");
+
+      copyBtn.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(textArea.value);
+          copyBtn.textContent = "Copied";
+          setTimeout(() => (copyBtn.textContent = "Copy attribution"), 1200);
+        } catch {
+          textArea.select();
+          document.execCommand("copy");
+          copyBtn.textContent = "Copied";
+          setTimeout(() => (copyBtn.textContent = "Copy attribution"), 1200);
+        }
+      });
+
+      // Progressive metadata load (author + license + rights)
+      (async () => {
+
+try {
+
+  const meta = await getPolyInfo(assetId);
+
+  // NEW AUTHOR EXTRACTION
+  const authors = extractAuthors(meta);
+
+  const creatorText =
+    authors.length
+      ? authors.join(", ")
+      : "Not listed";
+
+  const license =
+    meta?.license || "CC0";
+
+  const rights =
+    licenseStatement(license);
+
+  const attribution =
+   `"${displayName}" by ${creatorText}
+Source: https://polyhaven.com/a/${assetId}
+License: ${license}`;
+
+  card.querySelector(".creator").textContent =
+    creatorText;
+
+  card.querySelector(".license").innerHTML =
+    `<a href="https://creativecommons.org/publicdomain/zero/1.0/"
+     target="_blank"
+     rel="noopener noreferrer">
+
+     ${license}
+
+     </a>`;
+
+  card.querySelector(".rights").textContent =
+    rights;
+
+  const textArea =
+    card.querySelector(".attrib");
+
+  textArea.value = attribution;
+
+}
+catch(e){
+
+ console.log("Metadata error",e);
+
+}
+
+})();
+    }
+  }
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+
+    const query = document.getElementById("q").value.trim();
+    const assetType = document.getElementById("assetType")?.value || "textures";
+
+    resultsEl.innerHTML = "";
+    statusEl.textContent = "Searching Poly Haven...";
+
+    try {
+      const { assets, matchedCategory, categories } =
+        await searchPolyHavenByCategory(query, assetType);
+
+      renderPolyResults(assets, assetType, matchedCategory, categories, query);
+    } catch (err) {
+      statusEl.textContent = `Error: ${err.message}`;
+    }
+  });
+</script>
+
+
+
+
+
+  <section id="footer">
+<div id=""footer-id">
+  <footer>
+  <small>
+    © 2026 Thomas Macaluso. All rights reserved.
+  </small>
+</footer>
+</body>
+</html>

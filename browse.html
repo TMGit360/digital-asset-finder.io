@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Creative Commons Rights Finder</title>
+  
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<section class="background-control">
+<div id="h1-background">
+<h1>Creative Commons Digital Asset Finder</h1> 
+</div>
+
+
+<div class="navbar">
+  <a href="index.html">Home</a>
+  <a href="about.html">About</a>
+  <div class="dropdown">
+    <button class="dropbtn">Browse  
+      <i class="fa fa-caret-down"></i>
+    </button>
+    <div class="dropdown-content">  
+      <a href="browse.html">Photo, video, audio</a>
+      <a href="poly.html">3D Images</a>
+    </div>
+  </div>
+</div>
+
+
+<!-- Home -->
+
+<section class="browse-outside-text-block">
+  <section class="browse-index-text-block">
+    <h2>Wiki Commons</h2>
+<section class="browse-p-text">
+  <div id="browse-text">
+<p>
+Search Wikimedia Commons for rich-media such as images, videos, and audio files and information about the file type, title, creator, source, license, and source URL. Currently, functionality is limited to viewing of images and thumbnails of videos only. 
+</p>
+</section>
+</section>
+</section>
+
+  <form id="searchForm">
+    <input id="q" type="text" placeholder="Try: library, mural..." required />
+    <button type="submit">Search</button>
+  </form>
+
+
+
+  <div id="status" class="status"></div>
+  <div id="results" class="grid" aria-live="polite"></div>
+
+  <script>
+    const form = document.getElementById("searchForm");
+    const resultsEl = document.getElementById("results");
+    const statusEl = document.getElementById("status");
+
+    function stripHtml(html) {
+      if (!html) return "";
+      const div = document.createElement("div");
+      div.innerHTML = html;
+      return (div.textContent || div.innerText || "").trim();
+    }
+
+    function getExt(meta, key) {
+      // extmetadata fields often come as { value: "...", source: "..."}
+      return meta && meta[key] ? stripHtml(meta[key].value) : "";
+    }
+
+    function safeText(s) {
+      return (s || "").replace(/\s+/g, " ").trim();
+    }
+
+    async function searchCommons(query) {
+      // MediaWiki Action API
+      // origin=* is required for cross-site requests in browser fetch
+      // We search in the File namespace (ns=6)
+      const endpoint = "https://commons.wikimedia.org/w/api.php";
+      const url = new URL(endpoint);
+
+      url.searchParams.set("origin", "*");
+      url.searchParams.set("format", "json");
+      url.searchParams.set("action", "query");
+
+      // generator=search returns pages matching a search query
+      url.searchParams.set("generator", "search");
+      url.searchParams.set("gsrsearch", query);
+      url.searchParams.set("gsrnamespace", "6"); // File:
+      url.searchParams.set("gsrlimit", "100");
+
+      // prop=imageinfo pulls file URLs and metadata
+      url.searchParams.set("prop", "imageinfo");
+      url.searchParams.set("iiprop", "url|extmetadata");
+      url.searchParams.set("iiurlwidth", "520"); // thumbnail size
+
+      const resp = await fetch(url.toString());
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      return resp.json();
+    }
+
+    function renderResults(pagesObj) {
+      resultsEl.innerHTML = "";
+      const pages = Object.values(pagesObj || {});
+      if (pages.length === 0) {
+        resultsEl.innerHTML = "";
+        statusEl.textContent = "No results found. Try a broader keyword.";
+        return;
+      }
+
+      statusEl.textContent = `Showing ${pages.length} results.`;
+
+      for (const p of pages) {
+        const info = (p.imageinfo && p.imageinfo[0]) ? p.imageinfo[0] : null;
+        if (!info) continue;
+
+        const pageUrl = info.descriptionurl || "";
+        const thumb = info.thumburl || info.url || "";
+        const meta = info.extmetadata || {};
+
+        const licenseShort = safeText(getExt(meta, "LicenseShortName"));
+        const licenseUrl = safeText(getExt(meta, "LicenseUrl"));
+        const artist = safeText(getExt(meta, "Artist"));
+        const credit = safeText(getExt(meta, "Credit"));
+
+        // Many Commons files work best with: Title, Author, Source, License
+        const title = safeText(p.title || "").replace(/^File:/, "");
+        const attribution = [
+          title ? `"${title}"` : "",
+          artist ? `by ${artist}` : "",
+          pageUrl ? `Source: ${pageUrl}` : "",
+          licenseShort ? `License: ${licenseShort}` : ""
+        ].filter(Boolean).join(" | ");
+
+        const card = document.createElement("div");
+        card.className = "card";
+
+        card.innerHTML = `
+          <img class="thumb" src="${thumb}" alt="${title}">
+          <div class="title">${title || "Untitled file"}</div>
+          <div class="row"><b>Creator:</b> ${artist || "Not listed"}</div>
+          <div class="row"><b>License:</b> ${
+            licenseUrl
+              ? `<a href="${licenseUrl}" target="_blank" rel="noopener noreferrer">${licenseShort || "See license"}</a>`
+              : (licenseShort || "Not listed")
+          }</div>
+          <div class="row"><b>Credit:</b> ${credit || "Not listed"}</div>
+
+          <div class="row"><b>Attribution to copy:</b></div>
+          <textarea class="attrib" readonly>${attribution}</textarea>
+
+          <div class="actions">
+            <button class="smallbtn" type="button">Copy attribution</button>
+            <a href="${pageUrl}" target="_blank" rel="noopener noreferrer">Open asset page</a>
+          </div>
+        `;
+
+        const copyBtn = card.querySelector("button");
+        const textArea = card.querySelector("textarea");
+        copyBtn.addEventListener("click", async () => {
+          try {
+            await navigator.clipboard.writeText(textArea.value);
+            copyBtn.textContent = "Copied";
+            setTimeout(() => (copyBtn.textContent = "Copy attribution"), 1200);
+          } catch {
+            // fallback if clipboard blocked
+            textArea.select();
+            document.execCommand("copy");
+            copyBtn.textContent = "Copied";
+            setTimeout(() => (copyBtn.textContent = "Copy attribution"), 1200);
+          }
+        });
+
+        resultsEl.appendChild(card);
+      }
+    }
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const query = document.getElementById("q").value.trim();
+      resultsEl.innerHTML = "";
+      statusEl.textContent = "Searching...";
+      try {
+        const data = await searchCommons(query);
+        const pages = data?.query?.pages;
+        if (!pages) {
+          statusEl.textContent = "No results found. Try another keyword.";
+          return;
+        }
+        renderResults(pages);
+      } catch (err) {
+        statusEl.textContent = `Error: ${err.message}. If you opened this as a file, try running a local server.`;
+      }
+    });
+  </script>
+  </section>
+  <section id="footer">
+<div id="footer-id">
+  <footer>
+  <small>
+    © 2026 Thomas Macaluso. All rights reserved.
+  </small>
+</footer>
+</body>
+</html>
